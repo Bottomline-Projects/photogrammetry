@@ -182,30 +182,35 @@ def run_photogrammetry_pipeline(base_dir, project_name):
 
     # --- BUILD TEXTURE ---
     for chunk in doc.chunks:
-        if not chunk.model or not chunk.model.texture:
+        if not chunk.model:
+            log(f"⚠️ Skipping texture: no model in chunk {chunk.label}")
+            continue
+
+        if len(chunk.model.textures) == 0:
             log(f"🧵 Building texture for chunk: {chunk.label}")
 
-            if len(chunk.textures) == 0:
-                log(f"  ➤ Building UV for {chunk.label}...")
-                chunk.buildUV(
-                    mapping_mode=Metashape.MappingMode.GenericMapping,
-                    texture_size=8192,
-                    progress=progress_callback
-                )
+            log(f"  ➤ Building UV for {chunk.label}...")
+            chunk.buildUV(
+                mapping_mode=Metashape.MappingMode.GenericMapping,
+                texture_size=8192,
+                progress=progress_callback
+            )
 
-                log(f"  ➤ Building texture for {chunk.label}...")
-                chunk.buildTexture(
-                    blending_mode=Metashape.BlendingMode.MosaicBlending,
-                    texture_size=8192,
-                    ghosting_filter=True,
-                    fill_holes=True,
-                    progress=progress_callback
-                )
+            log(f"  ➤ Building texture for {chunk.label}...")
+            chunk.buildTexture(
+                blending_mode=Metashape.BlendingMode.MosaicBlending,
+                texture_size=8192,
+                ghosting_filter=True,
+                fill_holes=True,
+                progress=progress_callback
+            )
 
-                doc.save()
+            doc.save()
+        else:
+            log(f"✅ Texture already exists for chunk: {chunk.label}, skipping.")
 
     # --- EXPORT ---
-    merged_chunks = [c for c in doc.chunks if c.model and c.model.texture]
+    merged_chunks = [c for c in doc.chunks if c.model and len(c.model.textures) > 0]
     if not any(c.label == "Merged" for c in doc.chunks):
         log("📦 Exporting model...")
         merged = doc.addChunk()
