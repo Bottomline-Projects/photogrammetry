@@ -112,9 +112,10 @@ def run_photogrammetry_pipeline(base_dir, project_name):
 
     # --- SPLIT INTO CHUNKS PROPERLY (only if not already split) ---
     CHUNK_COUNT = 8
-    existing_gpu_chunks = [chunk for chunk in doc.chunks if chunk.label.startswith("GPU-")]
 
-    if len(existing_gpu_chunks) < CHUNK_COUNT:
+    if len(doc.chunks) >= CHUNK_COUNT:
+        log("✅ Chunks already split. Skipping split step.")
+    else:
         log(f"🔀 Splitting into {CHUNK_COUNT} chunks (copying tie points)...")
         chunk = doc.chunks[0]
         cameras = list(chunk.cameras)
@@ -122,9 +123,8 @@ def run_photogrammetry_pipeline(base_dir, project_name):
 
         for i in range(CHUNK_COUNT):
             new_chunk = chunk.copy()  # ✅ preserve alignment + tie points
-            new_chunk.label = f"GPU-{i}"
+            new_chunk.label = f"GPU-{i}"  # You can adjust label format if you want
 
-            # Clear all cameras, then assign only the ones needed
             new_chunk.cameras.clear()
 
             start = i * per_chunk
@@ -138,12 +138,14 @@ def run_photogrammetry_pipeline(base_dir, project_name):
 
         doc.remove(chunk)
         doc.save()
-    else:
-        log("✅ Chunks already split. Skipping split step.")
 
     # --- BUILD POINT CLOUD ---
     for chunk in doc.chunks:
         log(f"🌫️  Checking point cloud for chunk: {chunk.label}")
+
+        if not chunk.enabled or not chunk.cameras or all([not cam.transform for cam in chunk.cameras]):
+            log(f"⚠️ Skipping {chunk.label} — no valid cameras or chunk disabled.")
+            continue
 
         if chunk.depth_maps is None or not chunk.depth_maps:
             log(f"  ➤ Building depth maps for {chunk.label}...")
@@ -155,14 +157,14 @@ def run_photogrammetry_pipeline(base_dir, project_name):
             )
             doc.save()
 
-        if not chunk.point_cloud:
-            log(f"  ➤ Building dense cloud for {chunk.label}...")
-            chunk.buildPointCloud(
-                point_colors=True,
-                keep_depth=True,
-                progress=progress_callback
-            )
-            doc.save()
+        #if not chunk.point_cloud:
+            #log(f"  ➤ Building dense cloud for {chunk.label}...")
+            #chunk.buildPointCloud(
+                #point_colors=True,
+                #keep_depth=True,
+                #progress=progress_callback
+            #)
+            #doc.save()
 
     # --- BUILD MESH ---
     for chunk in doc.chunks:
@@ -172,7 +174,7 @@ def run_photogrammetry_pipeline(base_dir, project_name):
                 surface_type=Metashape.SurfaceType.Arbitrary,
                 source_data=Metashape.DataSource.DepthMapsData,  # ✅ GPU-accelerated
                 interpolation=Metashape.Interpolation.EnabledInterpolation,
-                face_count=Metashape.FaceCount.MediumFaceCount,
+                face_count=Metashape.FaceCount.LowFaceCount,
                 vertex_colors=False,
                 vertex_confidence=False,
                 trimming_radius=0,
@@ -209,35 +211,68 @@ def run_photogrammetry_pipeline(base_dir, project_name):
         else:
             log(f"✅ Texture already exists for chunk: {chunk.label}, skipping.")
 
-    # --- EXPORT ---
-    merged_chunks = [c for c in doc.chunks if c.model and len(c.model.textures) > 0]
-    if not any(c.label == "Merged" for c in doc.chunks):
-        log("📦 Exporting model...")
-        merged = doc.addChunk()
-        merged.label = "Merged"
-        merged.mergeChunks(merged_chunks, merge_models=True, merge_point_clouds=True)
-        obj_path = os.path.join(exports_dir, f"{project_name}.obj")
-        glb_path = os.path.join(exports_dir, f"{project_name}.glb")
-        merged.exportModel(
-            path=obj_path,
-            format=Metashape.ModelFormat.ModelFormatOBJ,
-            texture_format=Metashape.ImageFormat.ImageFormatJPEG,
-            save_texture=True,
-            save_uv=True,
-            save_normals=True
-        )
-        merged.exportModel(
-            path=glb_path,
-            format=Metashape.ModelFormat.ModelFormatGLB,
-            texture_format=Metashape.ImageFormat.ImageFormatJPEG,
-            save_texture=True,
-            save_uv=True,
-            save_normals=True
-        )
-    else:
-        log("✅ Merged model already exists, skipping export.")
 
-    log("✅ All steps completed!")
+    # --- EXPORT ---
+    log("📦 Preparing to merge and export chunks into single GLBs...")
+
+    glb_dir = os.path.join(exports_dir, "glb_exports")
+    os.makedirs(glb_dir, exist_ok=True)
+
+    def export_merged_glb(decimate_ratio=None, label="full"):
+        log(f"📦 Merging and exporting GLB for quality: {label}...")
+
+        # Collect only chunks that have a valid model
+        chunks_to_merge = []
+        for chunk in doc.chunks:
+            if not chunk.enabled or not chunk.model:
+                log(f"⚠️ Skipping {chunk.label} — no model or chunk disabled.")
+                continue
+            if chunk.model and len(chunk.model.faces) > 0:
+                chunks_to_merge.append(chunk)
+
+        if not chunks_to_merge:
+            log(f"❌ No chunks with valid models found for {label}. Skipping...")
+            return
+
+        log(f"🛠️ Merging {len(chunks_to_merge)} chunks...")
+        doc.mergeChunks(chunks_to_merge, merge_markers=False)
+
+        merged_chunk = doc.chunks[-1]  # ✅ get the newly created merged chunk manually
+
+        if not merged_chunk or not merged_chunk.model:
+            log(f"❌ Merge failed, no model produced for {label}.")
+            return
+
+        merged_chunk.label = f"Merged_{label}"
+        if decimate_ratio is not None:
+            log(f"🔻 Decimating merged model to {int(decimate_ratio * 100)}% faces...")
+            target_faces = int(len(merged_chunk.model.faces) * decimate_ratio)
+            merged_chunk.decimateModel(face_count=target_faces)
+
+        output_path = os.path.join(glb_dir, f"{project_name}_{label}.glb")
+        log(f"💾 Saving merged GLB to {output_path}...")
+        merged_chunk.exportModel(
+            path=output_path,
+            format=Metashape.ModelFormatGLTF,
+            binary=True,
+            save_texture=True,
+            save_uv=True,
+            save_normals=True,
+            texture_format=Metashape.ImageFormat.ImageFormatJPEG,
+            draco_compression_level=6
+        )
+
+        log(f"🧹 Removing merged chunk after export...")
+        doc.remove(merged_chunk)
+
+        log(f"✅ Finished merged GLB export for quality: {label}.")
+
+    # Export all three qualities
+    export_merged_glb(decimate_ratio=None, label="full")
+    export_merged_glb(decimate_ratio=0.15, label="medium")
+    export_merged_glb(decimate_ratio=0.03, label="low")
+
+    log("✅ All GLB exports complete.")
 
 # --- ENTRY POINT ---
 parser = argparse.ArgumentParser()
