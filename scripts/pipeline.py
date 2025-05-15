@@ -100,8 +100,8 @@ def run_photogrammetry_pipeline(base_dir, project_name):
         chunk.sensors[0].fixed = False
 
         chunk.matchPhotos(
-	    accuracy=Metashape.MediumAccuracy,
-            generic_preselection=True,
+            downscale=2,
+	    generic_preselection=True,
             reference_preselection=Metashape.ReferencePreselectionEstimated,
             keypoint_limit=40000,
             tiepoint_limit=4000,
