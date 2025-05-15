@@ -102,8 +102,8 @@ def run_photogrammetry_pipeline(base_dir, project_name):
         chunk.matchPhotos(
             downscale=2,
 	    generic_preselection=True,
-            reference_preselection=Metashape.ReferencePreselectionEstimated,
-            keypoint_limit=40000,
+            reference_preselection=Metashape.ReferencePreselectionMode.Estimated,
+	    keypoint_limit=40000,
             tiepoint_limit=4000,
             guided_matching=True,
             exclude_stationary=True,
