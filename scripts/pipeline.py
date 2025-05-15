@@ -107,7 +107,7 @@ def run_photogrammetry_pipeline(base_dir, project_name):
 	    keypoint_limit=40000,
             tiepoint_limit=4000,
             guided_matching=True,
-            exclude_stationary=True,
+            filter_stationary_points=True,
             progress=progress_callback
         )
         chunk.alignCameras(progress=progress_callback)
