@@ -100,11 +100,13 @@ def run_photogrammetry_pipeline(base_dir, project_name):
         chunk.sensors[0].fixed = False
 
         chunk.matchPhotos(
-            downscale=2,
+	    accuracy=Metashape.MediumAccuracy,
             generic_preselection=True,
-            reference_preselection=False,
-            keypoint_limit=160000,
-            tiepoint_limit=40000,
+            reference_preselection=Metashape.ReferencePreselectionEstimated,
+            keypoint_limit=40000,
+            tiepoint_limit=4000,
+            guided_matching=True,
+            exclude_stationary=True,
             progress=progress_callback
         )
         chunk.alignCameras(progress=progress_callback)
@@ -157,26 +159,18 @@ def run_photogrammetry_pipeline(base_dir, project_name):
             )
             doc.save()
 
-        #if not chunk.point_cloud:
-            #log(f"  ➤ Building dense cloud for {chunk.label}...")
-            #chunk.buildPointCloud(
-                #point_colors=True,
-                #keep_depth=True,
-                #progress=progress_callback
-            #)
-            #doc.save()
-
     # --- BUILD MESH ---
     for chunk in doc.chunks:
         if not chunk.model:
             log(f"🕸️   Building mesh for chunk: {chunk.label}")
             chunk.buildModel(
-                surface_type=Metashape.SurfaceType.Arbitrary,
                 source_data=Metashape.DataSource.DepthMapsData,  # ✅ GPU-accelerated
+                surface_type=Metashape.SurfaceType.Arbitrary,
                 interpolation=Metashape.Interpolation.EnabledInterpolation,
                 face_count=Metashape.FaceCount.LowFaceCount,
-                vertex_colors=False,
-                vertex_confidence=False,
+		filter_mode=Metashape.MildFiltering,             # optional, but improves detail/cleanliness
+                reuse_depth=True,
+                calculate_vertex_colors=True,
                 trimming_radius=0,
                 progress=progress_callback
             )
@@ -201,7 +195,7 @@ def run_photogrammetry_pipeline(base_dir, project_name):
             log(f"  ➤ Building texture for {chunk.label}...")
             chunk.buildTexture(
                 blending_mode=Metashape.BlendingMode.MosaicBlending,
-                texture_size=8192,
+                texture_size=4096,
                 ghosting_filter=True,
                 fill_holes=True,
                 progress=progress_callback
@@ -280,11 +274,17 @@ parser.add_argument("--project-name", required=True, help="Project name (used to
 parser.add_argument("--videos", required=True, help="Directory containing input 360 videos")
 parser.add_argument("--fps", type=int, default=2, help="Frames per second to extract")
 parser.add_argument("--output-dir", default="~/photogrammetry", help="Base output directory")
+parser.add_argument("--working-dir", help="Override temporary working directory location")
 args = parser.parse_args()
+
 
 args.output_dir = os.path.expanduser(args.output_dir)
 project_dir = os.path.join(args.output_dir, args.project_name)
 frames_dir = os.path.join(project_dir, "frames")
+
+working_path = os.path.expanduser(args.working_dir) if args.working_dir else os.path.join(args.output_dir, "metashapetmp")
+os.makedirs(working_path, exist_ok=True)
+Metashape.app.settings.setValue("working_path", working_path)
 
 # --- RUN ---
 extract_frames(args.videos, frames_dir, fps=args.fps)
